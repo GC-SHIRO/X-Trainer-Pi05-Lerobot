@@ -1,0 +1,73 @@
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+env/
+.python-version
+.hf-token
+credentials/
+
+# Python, tooling and editor state
+__pycache__/
+*.py[cod]
+*.so
+.cache/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyre/
+.tox/
+.nox/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+.vscode/
+.idea/
+*.swp
+*~
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Training runs, checkpoints and experiment logs
+outputs/
+runs/
+logs/
+wandb/
+tensorboard/
+checkpoints/
+training_state/
+pretrained_model/
+pretrained_model_ema/
+eval/
+
+# Local datasets, model files and downloaded assets
+data/
+datasets/
+artifacts/
+downloads/
+models/
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.onnx
+*.engine
+
+# Robot-specific machine state
+calibration/
+recordings/
+captures/
+videos/
+
+# Temporary files and OS metadata
+tmp/
+*.log
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db
