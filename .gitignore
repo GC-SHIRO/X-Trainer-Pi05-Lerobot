@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 .venv/
+.venv-*/
 venv/
 env/
 .python-version
@@ -47,10 +48,10 @@ eval/
 
 # Local datasets, model files and downloaded assets
 data/
-datasets/
+/datasets/
 artifacts/
 downloads/
-models/
+/models/
 *.safetensors
 *.ckpt
 *.pt

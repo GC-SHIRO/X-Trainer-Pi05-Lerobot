@@ -1,0 +1,9 @@
+policy:
+  type: pi05
+  checkpoint: outputs/train/xtrainer_pi05/checkpoints/last/pretrained_model
+  device: cuda
+  actions_per_chunk: 50
+network:
+  host: 127.0.0.1
+  port: 8000
+  max_payload_mb: 64

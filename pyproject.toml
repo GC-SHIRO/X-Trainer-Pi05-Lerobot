@@ -221,6 +221,7 @@ phone = ["hebi-py>=2.8.0,<2.12.0", "teleop>=0.1.0,<0.2.0", "fastapi<1.0", "lerob
 
 # Policies
 pi05 = ["lerobot[transformers-dep]", "lerobot[scipy-dep]", "lerobot[sentencepiece-dep]"]
+xtrainer = ["msgpack>=1.1.0,<2.0.0", "aiohttp>=3.12.0,<4.0.0", "PyYAML>=6.0,<7.0"]
 
 # Features
 # Remote inference transport and serialization.
@@ -275,6 +276,7 @@ all = [
     "lerobot[training]",
     "lerobot[hardware]",
     "lerobot[pi05]",
+    "lerobot[xtrainer]",
     "lerobot[remote]",
     "lerobot[peft]",
 ]

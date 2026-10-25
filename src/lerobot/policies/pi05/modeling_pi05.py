@@ -1081,7 +1081,7 @@ class PI05Policy(PreTrainedPolicy):
         Args:
             config: Policy configuration class instance.
         """
-        require_package("transformers", extra="pi")
+        require_package("transformers", extra="pi05")
         super().__init__(config)
         config.validate_features()
         self.config = config
@@ -1178,9 +1178,7 @@ class PI05Policy(PreTrainedPolicy):
                 original_state_dict = load_file(resolved_file)
                 print("✓ Loaded state dict from model.safetensors")
             except Exception as e:
-                print(f"Could not load state dict from remote files: {e}")
-                print("Returning model without loading pretrained weights")
-                return model
+                raise RuntimeError(f"Failed to read Pi05 weights from {pretrained_name_or_path}") from e
 
             remapped_state_dict = model._convert_openpi_state_dict(original_state_dict)
 
@@ -1211,7 +1209,7 @@ class PI05Policy(PreTrainedPolicy):
                 print("All keys loaded successfully!")
 
         except Exception as e:
-            print(f"Warning: Could not load state dict: {e}")
+            raise RuntimeError(f"Failed to load Pi05 checkpoint {pretrained_name_or_path}") from e
 
         return model
 

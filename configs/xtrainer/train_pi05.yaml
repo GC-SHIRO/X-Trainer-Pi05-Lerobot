@@ -1,0 +1,28 @@
+dataset:
+  repo_id: xtrainer/pi05
+  root: null
+  streaming: false
+policy:
+  type: pi05
+  path: lerobot/pi05_base
+  device: cuda
+  dtype: bfloat16
+  chunk_size: 50
+  n_action_steps: 50
+  max_state_dim: 32
+  max_action_dim: 32
+  gradient_checkpointing: true
+  use_relative_actions: false
+  push_to_hub: false
+output_dir: outputs/train/xtrainer_pi05
+job_name: xtrainer_pi05
+batch_size: 4
+steps: 30000
+num_workers: 4
+log_freq: 50
+save_freq: 5000
+env_eval_freq: 0
+eval_steps: 0
+use_policy_training_preset: true
+wandb:
+  enable: false
