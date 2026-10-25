@@ -1,0 +1,4 @@
+# Tested as a package-resolution baseline; Linux runtime validation is required.
+torch==2.8.0
+torchvision==0.23.0
+torchcodec==0.7.0

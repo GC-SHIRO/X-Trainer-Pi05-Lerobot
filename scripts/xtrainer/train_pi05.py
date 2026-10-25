@@ -36,8 +36,15 @@ def build_command(args):
         command = [sys.executable, "-m", "lerobot.scripts.lerobot_train",
                    f"--config_path={ROOT / 'configs/xtrainer/train_pi05.yaml'}",
                    "--policy.input_features={}"]
-        if args.policy_path:
-            command.append(f"--policy.path={args.policy_path}")
+        policy_path = args.policy_path
+        local_base = ROOT / "models/pi05-base"
+        if not policy_path and (local_base / "config.json").is_file():
+            policy_path = str(local_base)
+        if policy_path:
+            command.append(f"--policy.path={policy_path}")
+            tokenizer = Path(policy_path).expanduser().resolve() / "tokenizer"
+            if tokenizer.is_dir():
+                command.append(f"--policy.text_tokenizer_name={tokenizer}")
     command += [f"--dataset.root={root}", f"--dataset.repo_id={args.repo_id}"]
     for attr, flag in (("steps", "steps"), ("batch_size", "batch_size"),
                        ("device", "policy.device"), ("output_dir", "output_dir")):
