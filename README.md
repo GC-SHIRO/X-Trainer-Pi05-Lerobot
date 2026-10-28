@@ -379,16 +379,11 @@ python scripts/xtrainer/serve_mock_policy.py --host 0.0.0.0 --port 8000
 
 ```bash
 python scripts/xtrainer/run_real.py \
-  --host <GPU服务器IP> --port 8000 \
-  --task "将桌面上的方块放入收纳盒" \
-  --left-robot-ip 192.168.5.1 \
-  --right-robot-ip 192.168.5.2 \
-  --left-gripper-port /dev/ttyUSB1 \
-  --right-gripper-port /dev/ttyUSB0 \
-  --camera-top-serial <顶部相机序列号> \
-  --camera-left-wrist-serial <左腕相机序列号> \
-  --camera-right-wrist-serial <右腕相机序列号> \
-  --control-hz 30 --action-horizon 32 --max-steps 100 \
+  --host 127.0.0.1 --port 8000 \
+  --task "将吸管插进杯子里" \
+  --control-hz 30 \
+  --action-horizon 32 \
+  --max-steps 1000 \
   --execute
 ```
 

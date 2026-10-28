@@ -2,6 +2,8 @@
 from pathlib import Path
 import numpy as np
 
+from deploy.xtrainer.real.constants import XTRAINER_RESET_POSE
+
 CAMERAS = ("top", "left_wrist", "right_wrist")
 
 
@@ -54,7 +56,8 @@ class PI05XTrainerPolicy:
 
     def metadata(self):
         return {"model_type": "pi05", "schema_version": 1, "action_dim": 14,
-                "state_dim": 14, "chunk_size": self.actions_per_chunk}
+                "state_dim": 14, "chunk_size": self.actions_per_chunk,
+                "reset_pose": list(XTRAINER_RESET_POSE)}
 
     def reset(self):
         self.policy.reset()

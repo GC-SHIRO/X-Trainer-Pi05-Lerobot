@@ -17,7 +17,7 @@ from deploy.xtrainer.websocket_policy_server import XTrainerWebSocketPolicyServe
 from scripts.xtrainer import convert_raw_to_lerobot as convert
 from scripts.xtrainer.run_real import _validate_server_metadata
 from scripts.xtrainer.serve_mock_policy import HoldCurrentMockPolicy
-from scripts.xtrainer.train_pi05 import build_command
+from scripts.xtrainer.train_pi05 import JOINT_NAMES, build_command
 
 
 def payload():
@@ -26,7 +26,7 @@ def payload():
 
 
 def config():
-    return SimpleNamespace(chunk_size=50,
+    return SimpleNamespace(chunk_size=50, max_state_dim=32,
         input_features={"observation.state": SimpleNamespace(shape=(14,))},
         output_features={"action": SimpleNamespace(shape=(14,))},
         image_features={f"observation.images.{name}": None for name in CAMERAS},
@@ -46,6 +46,51 @@ def test_checkpoint_contract():
     cfg.output_features["action"].shape = (32,)
     with pytest.raises(ValueError):
         PI05XTrainerPolicy.validate_config(cfg, 32)
+
+
+def test_pi05_startup_resets_before_inference(monkeypatch):
+    from deploy.xtrainer.real.constants import XTRAINER_RESET_POSE
+    from scripts.xtrainer import run_real
+
+    adapter = PI05XTrainerPolicy.__new__(PI05XTrainerPolicy)
+    adapter.actions_per_chunk = 50
+    metadata = adapter.metadata()
+    assert metadata["reset_pose"] == list(XTRAINER_RESET_POSE)
+    events = []
+
+    async def connect():
+        return {"protocol": "xtrainer.websocket.msgpack",
+                "protocol_version": run_real.PROTOCOL_VERSION,
+                "schema_version": run_real.SCHEMA_VERSION, "policy": metadata}
+
+    async def reset():
+        events.append("policy_reset")
+
+    async def close():
+        events.append("policy_close")
+
+    async def loop(*args, **kwargs):
+        events.append("inference")
+
+    def smooth_reset(pose):
+        np.testing.assert_array_equal(pose, XTRAINER_RESET_POSE)
+        events.append("pose_reset")
+
+    environment = SimpleNamespace(
+        reset=lambda: events.append("connect_hardware"),
+        enable_arms=lambda: events.append("enable"),
+        smooth_reset=smooth_reset, close=lambda: events.append("hardware_close"))
+    policy = SimpleNamespace(connect=connect, reset=reset, close=close)
+    monkeypatch.setattr(run_real, "run_control_loop", loop)
+    args = run_real.parse_args(["--host", "localhost", "--execute"])
+    asyncio.run(run_real.run(args, policy=policy, environment=environment))
+    assert events == ["connect_hardware", "enable", "pose_reset", "policy_reset",
+                      "inference", "hardware_close", "policy_close"]
+    events.clear()
+    args.execute = False
+    with pytest.raises(RuntimeError, match="motion is disabled"):
+        asyncio.run(run_real.run(args, policy=policy, environment=environment))
+    assert events == []
 
 
 @pytest.mark.parametrize("field,value", [("state", np.zeros(13)), ("state", np.full(14, np.nan)),
@@ -102,8 +147,10 @@ def test_mock_server_roundtrip():
 def test_launcher(tmp_path):
     meta = tmp_path / "meta"
     meta.mkdir()
-    features = {key: {"shape": [14]} for key in ("action", "observation.state")}
-    features.update({f"observation.images.{name}": {} for name in CAMERAS})
+    features = {key: {"shape": [14], "dtype": "float32", "names": JOINT_NAMES}
+                for key in ("action", "observation.state")}
+    features.update({f"observation.images.{name}": {"shape": [8, 10, 3], "dtype": "video"}
+                     for name in CAMERAS})
     (meta / "info.json").write_text(json.dumps({"codebase_version": "v3.0", "features": features}))
     (meta / "stats.json").write_text(json.dumps({key: {"q01": [0]*14, "q99": [1]*14}
                                                for key in ("action", "observation.state")}))

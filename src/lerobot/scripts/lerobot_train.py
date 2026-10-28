@@ -663,6 +663,11 @@ def train(cfg: TrainPipelineConfig) -> None:
 
     # --- processors (overrides built once, as one typed mapping) -------------------------------
     processor_pretrained_path = resume_pretrained_dir or active_cfg.pretrained_path
+    if not cfg.resume and getattr(active_cfg, "type", None) == "pi05":
+        # Base processors can retain pretraining camera names, tokenizer settings,
+        # padding and relative-action settings. Fine-tuning must save processors
+        # built from the resolved policy config and this dataset's statistics.
+        processor_pretrained_path = None
     if not cfg.resume and getattr(active_cfg, "recipe", None) is not None:
         if processor_pretrained_path is not None and is_main_process():
             logging.warning(

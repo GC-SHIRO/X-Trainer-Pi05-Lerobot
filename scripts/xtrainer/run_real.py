@@ -711,7 +711,9 @@ async def run(
         active_environment.reset()
         active_environment.enable_arms()
         if reset_pose is not None:
+            _LOGGER.info("Moving to startup reset pose: %s", reset_pose.tolist())
             active_environment.smooth_reset(reset_pose)
+            _LOGGER.info("Startup reset complete; starting policy inference")
         await policy.reset()
 
         await run_control_loop(

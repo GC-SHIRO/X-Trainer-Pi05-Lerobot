@@ -13,6 +13,10 @@ policy:
   max_action_dim: 32
   gradient_checkpointing: true
   use_relative_actions: false
+  n_obs_steps: 1
+  use_visual_memory: false
+  use_proprioceptive_memory: false
+  empty_cameras: 0
   push_to_hub: false
 output_dir: outputs/train/xtrainer_pi05
 job_name: xtrainer_pi05
