@@ -184,7 +184,32 @@ python scripts/xtrainer/convert_raw_to_lerobot.py \
 raw 转换器保留采集图像方向。对于与 X-VLA 相同、需要纠正右手相机朝向的采集数据，
 转换后额外运行下面的脚本，再用纠正后的副本训练。
 
-### 5.1 手部相机朝向纠正（与 X-VLA 一致）
+### 5.1 Turbo：加速 raw → LeRobot v3
+
+数据较多时，可用独立的 turbo 脚本替代普通转换器：
+
+```bash
+python scripts/xtrainer/convert_raw_to_lerobot_turbo.py \
+  --raw-root /data/xtrainer/raw \
+  --output /data/xtrainer/dataset_v3 \
+  --repo-id xtrainer/pi05 \
+  --task "将桌面上的方块放入收纳盒" \
+  --fps 30 \
+  --workers 4 --prefetch 16 --encoder-threads 2
+```
+
+沿用 X-VLA turbo 的并行读图、内存直接编码思路；本脚本使用 LeRobot v3 自带的
+流式视频写入接口，省去临时 PNG 的写入和重读。`--workers` 是读帧线程数，
+`--prefetch` 限制待处理的帧数（每帧包含三路图像），`--encoder-queue-size` 默认 16。
+内存不足时减小后两项。episode 按目录名排序、帧按编号排序，与普通转换器一致。
+v3 索引、episode 元信息和统计（包括 `q01/q99`）由 LeRobot 生成。
+
+默认视频编码为 H.264，`--crf 18 --preset fast`，需要当前 Python 环境的 PyAV 支持 `libx264`。
+仅输出视频，不支持 `--images`；与普通转换器的默认编码不同，不保证视频字节或图像统计完全相同。
+输出必须是新目录；全部转换成功后才生成最终输出目录，失败时清理临时副本。
+相机字段、关节顺序及原图朝向与普通转换器一致；需要右手纠正时，继续执行下一节脚本。
+
+### 5.2 手部相机朝向纠正（与 X-VLA 一致）
 
 `tools/transform_xtrainer_dataset_images.py` 的规则是：顶视和左手不变，
 右手先上下翻转、再左右翻转（即旋转 180°）。只修改图像，不交换左右手，
