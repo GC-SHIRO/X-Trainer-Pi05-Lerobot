@@ -39,8 +39,9 @@ class PI05XTrainerPolicy:
     def validate_config(config, count):
         if not 0 < count <= config.chunk_size:
             raise ValueError("actions_per_chunk must be between 1 and checkpoint chunk_size")
-        if tuple(config.input_features["observation.state"].shape) != (14,):
-            raise ValueError("Checkpoint state must have 14 dimensions")
+        # Pi05 pads state to max_state_dim internally, so the saved config may report 32 instead of 14.
+        if tuple(config.input_features["observation.state"].shape) not in {(14,), (config.max_state_dim,)}:
+            raise ValueError("Checkpoint state must have 14 dimensions (or max_state_dim when padded)")
         if tuple(config.output_features["action"].shape) != (14,):
             raise ValueError("Checkpoint action must have 14 dimensions")
         expected = {f"observation.images.{name}" for name in CAMERAS}
