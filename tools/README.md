@@ -11,6 +11,7 @@
 | `download_pi05_weights_hf.sh` | Hugging Face 下载入口 |
 | `download_pi05_weights_modelscope.sh` | ModelScope 下载入口 |
 | `download_pi05_weights.py` | 共享下载、完整性检查及离线 tokenizer 路径配置 |
+| `transform_xtrainer_dataset_images.py` | 生成 v3 视频数据集副本，仅将右手图像旋转 180°；用法见主 README 第 5.1 节 |
 
 ## 环境
 

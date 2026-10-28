@@ -181,7 +181,39 @@ python scripts/xtrainer/convert_raw_to_lerobot.py \
 | `--task` | `task` |
 
 该流程使用 LeRobot v3，不直接接收 XVLA 工程的 v2.1 数据。
-XVLA 的 v2.1 相机翻转脚本不能直接用于本数据格式；当前转换器保留采集图像方向。
+raw 转换器保留采集图像方向。对于与 X-VLA 相同、需要纠正右手相机朝向的采集数据，
+转换后额外运行下面的脚本，再用纠正后的副本训练。
+
+### 5.1 手部相机朝向纠正（与 X-VLA 一致）
+
+`tools/transform_xtrainer_dataset_images.py` 的规则是：顶视和左手不变，
+右手先上下翻转、再左右翻转（即旋转 180°）。只修改图像，不交换左右手，
+不修改关节状态、动作、任务或相机字段名称。
+
+```bash
+# 先检查输入和转换计划
+python tools/transform_xtrainer_dataset_images.py \
+  --input-root /data/xtrainer/dataset_v3 \
+  --output-root /data/xtrainer/dataset_v3_corrected \
+  --dry-run
+
+# 生成纠正后的副本
+python tools/transform_xtrainer_dataset_images.py \
+  --input-root /data/xtrainer/dataset_v3 \
+  --output-root /data/xtrainer/dataset_v3_corrected
+
+# 后续训练使用纠正后的目录
+python scripts/xtrainer/train_pi05.py \
+  --dataset-root /data/xtrainer/dataset_v3_corrected
+```
+
+要求 PATH 中有 `ffmpeg` 和 `ffprobe`，且 FFmpeg 支持 `libx264`。
+仅支持本仓库默认生成的 **LeRobot v3.0 视频数据集**，不支持转换时带 `--images` 的数据集或 v2.1。
+输出必须是新目录，源数据不修改。脚本按 v3 的视频分块处理，并检查转换前后的帧数和时间戳，
+保持原有 episode 索引与时间偏移；右手视频编码信息同步更新为 H.264。
+默认 `--crf 18 --preset medium` 与 X-VLA 相同，右手视频会重新编码。
+纠正记录保存在 `meta/xtrainer_camera_orientation.json`，对已有该记录的数据集会拒绝重复翻转。
+若采集图像本身已与部署朝向一致，则跳过本步骤。
 
 ## 6. Pi05 微调
 
