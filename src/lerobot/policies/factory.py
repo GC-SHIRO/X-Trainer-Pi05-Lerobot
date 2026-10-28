@@ -301,7 +301,9 @@ def make_policy(
         features = {rename_map.get(key, key): feature for key, feature in features.items()}
 
     cfg.output_features = {key: ft for key, ft in features.items() if ft.type is FeatureType.ACTION}
-    if not cfg.input_features:
+    # Pi05 base checkpoints carry camera names from pretraining. Resolve inputs
+    # from the fine-tuning dataset so the saved policy and processors agree with it.
+    if not cfg.input_features or (cfg.type == "pi05" and ds_meta is not None):
         cfg.input_features = {key: ft for key, ft in features.items() if key not in cfg.output_features}
 
     # Store action feature names for relative_exclude_joints support
