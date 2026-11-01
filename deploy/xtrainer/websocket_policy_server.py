@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -15,6 +17,7 @@ from .image_codec import decode_policy_images
 from .msgpack_numpy import ProtocolError, dumps, loads, protocol_metadata
 
 PolicyInfer = Callable[[dict[str, Any]], dict[str, Any] | Awaitable[dict[str, Any]]]
+_LOGGER = logging.getLogger(__name__)
 
 
 class XTrainerWebSocketPolicyServer:
@@ -119,19 +122,27 @@ class XTrainerWebSocketPolicyServer:
                     await result
             return {"type": "reset", "ok": True}
         if request_type == "infer":
+            started = time.perf_counter()
+            _LOGGER.info("Inference request received; decoding images")
             payload = request.get("payload")
             if not isinstance(payload, dict):
                 raise ProtocolError("infer request requires a payload map")
             payload = decode_policy_images(payload)
+            decoded = time.perf_counter()
+            _LOGGER.info("Image decode %.1f ms; inference starting", (decoded - started) * 1000)
             infer = getattr(self.policy, "infer", None)
             if not callable(infer):
                 raise ProtocolError("policy does not implement infer(payload)")
-            result = infer(payload)
-            if inspect.isawaitable(result):
-                result = await result
+            try:
+                result = infer(payload)
+                if inspect.isawaitable(result):
+                    result = await result
+            finally:
+                _LOGGER.info("Inference finished or failed after %.1f ms", (time.perf_counter() - decoded) * 1000)
             if not isinstance(result, dict):
                 raise ProtocolError("policy infer(payload) must return a map")
-            return {"type": "infer", "payload": result}
+            return {"type": "infer", "payload": result,
+                    "server_processing_ms": (time.perf_counter() - started) * 1000}
         raise ProtocolError("request type must be one of metadata, reset, infer")
 
     def _ok(self, payload: dict[str, Any]) -> bytes:

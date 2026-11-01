@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 from typing import Any
+import logging
+import time
 
 from .image_codec import JPEG_RGB_ENCODING, encode_policy_images
 from .msgpack_numpy import PROTOCOL_VERSION, ProtocolError, dumps, loads
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class XTrainerWebSocketPolicyClient:
@@ -93,10 +97,25 @@ class XTrainerWebSocketPolicyClient:
         return await self.request({"type": "reset"})
 
     async def infer(self, payload: dict[str, Any]) -> dict[str, Any]:
+        started = time.perf_counter()
         image_encodings = self.metadata.get("image_encodings", []) if self.metadata is not None else []
         if self.image_jpeg_quality > 0 and JPEG_RGB_ENCODING in image_encodings:
             payload = encode_policy_images(payload, self.image_jpeg_quality)
-        response = await self.request({"type": "infer", "payload": payload})
+        encoded = time.perf_counter()
+        try:
+            response = await self.request({"type": "infer", "payload": payload})
+        except BaseException:
+            _LOGGER.warning("Inference request interrupted after %.1f ms (image encoding %.1f ms)",
+                            (time.perf_counter() - started) * 1000, (encoded - started) * 1000)
+            raise
+        request_ms = (time.perf_counter() - encoded) * 1000
+        server_ms = response.get("server_processing_ms")
+        if isinstance(server_ms, (int, float)):
+            _LOGGER.info("Inference timing: image encoding %.1f ms, request round trip %.1f ms, server processing %.1f ms, remaining transport/serialization %.1f ms",
+                         (encoded - started) * 1000, request_ms, server_ms, max(0.0, request_ms - server_ms))
+        else:
+            _LOGGER.info("Inference timing: image encoding %.1f ms, request round trip %.1f ms; server timing unavailable",
+                         (encoded - started) * 1000, request_ms)
         result = response.get("payload")
         if not isinstance(result, dict):
             raise ProtocolError("infer response payload must be a map")
