@@ -22,7 +22,7 @@ async def serve(args):
     if not checkpoint.is_absolute():
         checkpoint = ROOT / checkpoint
     count = args.actions_per_chunk if args.actions_per_chunk is not None else policy["actions_per_chunk"]
-    adapter = PI05XTrainerPolicy(checkpoint, args.device or policy["device"], count)
+    adapter = PI05XTrainerPolicy(checkpoint, args.device or policy["device"], count, rtc=policy.get("rtc"))
     server = XTrainerWebSocketPolicyServer(
         adapter, host=args.host or network["host"],
         port=args.port if args.port is not None else network["port"],

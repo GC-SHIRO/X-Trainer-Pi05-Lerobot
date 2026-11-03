@@ -3,6 +3,11 @@ policy:
   checkpoint: outputs/train/xtrainer_pi05/checkpoints/last/pretrained_model
   device: cuda
   actions_per_chunk: 50
+  rtc:
+    enabled: true
+    mode: guided
+    execution_horizon: 10
+    max_guidance_weight: 10.0
 network:
   host: 127.0.0.1
   port: 8000

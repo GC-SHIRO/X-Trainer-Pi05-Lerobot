@@ -10,7 +10,7 @@ CAMERAS = ("top", "left_wrist", "right_wrist")
 class PI05XTrainerPolicy:
     """Load a fine-tuned 14-joint checkpoint and its saved normalization pipeline."""
 
-    def __init__(self, checkpoint, device="cuda", actions_per_chunk=50):
+    def __init__(self, checkpoint, device="cuda", actions_per_chunk=50, rtc=None):
         import torch
         from lerobot.policies import PI05Config, make_pre_post_processors
         from lerobot.policies.pi05.modeling_pi05 import PI05Policy
@@ -28,6 +28,14 @@ class PI05XTrainerPolicy:
         self.validate_config(config, actions_per_chunk)
         if str(device).startswith("cuda") and not torch.cuda.is_available():
             raise RuntimeError("CUDA requested but unavailable")
+        self.rtc_enabled = bool(rtc and rtc.get("enabled"))
+        if self.rtc_enabled:
+            from lerobot.policies.rtc.configuration_rtc import RTCConfig
+            if rtc.get("mode", "guided") != "guided":
+                raise ValueError("X-Trainer currently supports guided RTC only")
+            config.rtc_config = RTCConfig(**rtc)
+            if actions_per_chunk != config.chunk_size:
+                raise ValueError("RTC requires the full checkpoint chunk_size")
         config.device = device
         config.compile_model = False
         self.policy = PI05Policy.from_pretrained(path, config=config).eval()
@@ -56,7 +64,7 @@ class PI05XTrainerPolicy:
 
     def metadata(self):
         return {"model_type": "pi05", "schema_version": 1, "action_dim": 14,
-                "state_dim": 14, "chunk_size": self.actions_per_chunk,
+                "rtc_enabled": getattr(self, "rtc_enabled", False), "state_dim": 14, "chunk_size": self.actions_per_chunk,
                 "reset_pose": list(XTRAINER_RESET_POSE)}
 
     def reset(self):
@@ -89,12 +97,28 @@ class PI05XTrainerPolicy:
         for name in CAMERAS:
             image = np.asarray(payload["images"][name]).copy()
             batch[f"observation.images.{name}"] = torch.from_numpy(image).permute(2, 0, 1).float() / 255
-        with torch.inference_mode():
-            actions = self.policy.predict_action_chunk(self.preprocessor(batch))
+        kwargs = {}
+        if getattr(self, "rtc_enabled", False):
+            previous = payload.get("prev_chunk_left_over")
+            delay = payload.get("inference_delay", 0)
+            if type(delay) is not int or delay < 0:
+                raise ValueError("inference_delay must be a nonnegative integer")
+            if previous is not None:
+                previous = np.asarray(previous, dtype=np.float32)
+                if previous.ndim != 2 or previous.shape[1] != 14 or not 0 < len(previous) <= self.actions_per_chunk or not np.isfinite(previous).all() or delay >= len(previous):
+                    raise ValueError("Invalid RTC prefix or insufficient delay coverage")
+                previous = torch.from_numpy(previous).to(self.policy.config.device).unsqueeze(0)
+            kwargs = dict(prev_chunk_left_over=previous, inference_delay=delay)
+        with torch.no_grad():
+            actions = self.policy.predict_action_chunk(self.preprocessor(batch), **kwargs)
+            model_actions = actions.detach().float().cpu().numpy().copy()
             actions = self.postprocessor(actions).detach().float().cpu().numpy()
         if actions.ndim != 3 or actions.shape[0] != 1 or actions.shape[2] != 14:
             raise ValueError(f"Unexpected model action shape: {actions.shape}")
         actions = actions[0, :self.actions_per_chunk]
         if actions.shape != (self.actions_per_chunk, 14) or not np.isfinite(actions).all():
             raise ValueError("Model returned an incomplete or non-finite action chunk")
-        return {"action": actions}
+        result = {"action": actions}
+        if getattr(self, "rtc_enabled", False):
+            result["model_action"] = model_actions[0, :self.actions_per_chunk]
+        return result

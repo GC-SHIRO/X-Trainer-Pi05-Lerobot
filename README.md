@@ -411,8 +411,8 @@ python scripts/xtrainer/serve_policy.py \
 默认值见 [configs/xtrainer/deploy.yaml](configs/xtrainer/deploy.yaml)；
 不传 `--host` 时只监听本机。服务器使用训练时保存的归一化参数，
 要求检查点具有三路约定相机和 14 维输出。
-当前服务支持单帧、同步动作分块；启用历史记忆、RTC（实时衔接动作段）
-或尚未合并的适配器会被拒绝。
+当前服务支持单帧同步动作分块或 guided RTC（实时衔接动作段）；默认部署配置启用 guided RTC。
+历史记忆、检查点内已启用的 RTC 配置或尚未合并的适配器会被拒绝；RTC 由部署配置启用。
 
 健康检查与元信息：
 
@@ -485,3 +485,28 @@ python -m pytest tests/xtrainer -q
 
 代码许可证见 [LICENSE](LICENSE)。预训练权重的使用条款以对应模型仓库为准。
 更多工具参数见 [tools/README.md](tools/README.md)。
+
+
+## X-Trainer guided RTC deployment
+
+`configs/xtrainer/deploy.yaml` now enables guided RTC. Start `serve_policy.py`
+with a complete Pi05 checkpoint as before; `actions_per_chunk` must equal the
+checkpoint chunk size (normally 50). The client automatically selects RTC from
+server metadata and retains the full returned chunk, ignoring `--action-horizon`
+in RTC mode. Set `policy.rtc.enabled: false` to use sequential chunks.
+
+Guided RTC does not require RTC-specific training. Predictions return both
+postprocessed robot actions and model-space continuation. No chunk smoothing,
+start blending, or tail deceleration is applied; their old CLI flags are removed.
+Existing hardware limits and optional client delta limits still apply.
+
+One successor request is issued when at most max(15, estimated_delay + 5) actions
+remain. Delay includes a two-step margin. Queue exhaustion, expired results, and
+insufficient continuation stop the run with an error and request a measured-pose
+hold. There is no automatic reconnect/recovery; restart after a fault. Ctrl+C
+cancels client waiting, holds if possible, and closes hardware. It does not cancel
+GPU computation already running on the server. Use only one robot client per
+server. Camera capture remains synchronous; measure its impact on control timing.
+
+Validation must include at least two real Pi05 predictions (the second with a
+nonempty continuation). Unit tests do not establish real-model or robot readiness.

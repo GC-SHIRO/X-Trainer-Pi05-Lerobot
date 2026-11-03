@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+import asyncio
 import logging
 import time
 
@@ -100,7 +101,7 @@ class XTrainerWebSocketPolicyClient:
         started = time.perf_counter()
         image_encodings = self.metadata.get("image_encodings", []) if self.metadata is not None else []
         if self.image_jpeg_quality > 0 and JPEG_RGB_ENCODING in image_encodings:
-            payload = encode_policy_images(payload, self.image_jpeg_quality)
+            payload = await asyncio.to_thread(encode_policy_images, payload, self.image_jpeg_quality)
         encoded = time.perf_counter()
         try:
             response = await self.request({"type": "infer", "payload": payload})
