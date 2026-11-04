@@ -1359,6 +1359,26 @@ class PI05Policy(PreTrainedPolicy):
     def _rtc_enabled(self) -> bool:
         return self.config.rtc_config is not None and self.config.rtc_config.enabled
 
+    def validate_chunk_input_features(self, features):
+        """Accept camera resizing and state padding already implemented by Pi05."""
+        from dataclasses import replace
+
+        canonical = []
+        for feature in features:
+            expected = (self.config.input_features or {}).get(feature.name)
+            if expected is not None and feature.name in self.config.image_features:
+                if feature.kind != "rgb" or len(feature.shape) != 3 or feature.shape[-1] != 3:
+                    raise ValueError(f"Expected HWC RGB input: {feature.name}")
+                shape = expected.shape
+                feature = replace(feature, shape=(shape[1], shape[2], shape[0]))
+            elif expected is not None and feature.name == "observation.state":
+                if feature.kind != "tensor" or len(feature.shape) != 1 or not 0 < feature.shape[0] <= self.config.max_state_dim:
+                    raise ValueError("Pi05 state must fit max_state_dim before padding")
+                # Names describe physical joints rather than model padding slots.
+                feature = replace(feature, shape=tuple(expected.shape), names=())
+            canonical.append(feature)
+        super().validate_chunk_input_features(tuple(canonical))
+
     def _preprocess_images(self, batch: dict[str, Tensor]) -> tuple[list[Tensor], list[Tensor]]:
         """Preprocess images for the model.
 
