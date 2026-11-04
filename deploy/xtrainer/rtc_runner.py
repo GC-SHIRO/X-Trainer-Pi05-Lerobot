@@ -17,6 +17,7 @@ async def execute_chunks(policy, environment, *, payload_fn, extract_fn, rate_li
     last_sent = None
     delay = 1
     step = 0
+    previous_send_started = None
 
     async def request(observation, prefix=None):
         payload = payload_fn(observation)
@@ -49,10 +50,13 @@ async def execute_chunks(policy, environment, *, payload_fn, extract_fn, rate_li
                 consumed = step - request_step
                 elapsed = max(consumed, int(np.ceil((clock() - request_started) / period)))
                 delay = max(1, elapsed + 2)
-                logger.info("RTC result: elapsed_steps=%d executed_steps=%d next_delay=%d", elapsed, consumed, delay)
+                logger.info("RTC result: elapsed_steps=%d executed_steps=%d alignment_steps=%d next_delay=%d", elapsed, consumed, consumed, delay)
                 if elapsed >= len(incoming):
                     raise RuntimeError("RTC prediction expired; stopping")
-                actions, model, index = incoming[elapsed:], incoming_model[elapsed:], 0
+                # This executor advances one action per successful apply_action,
+                # including when a tick overruns. The prefix is indexed by those
+                # actions, not wall-clock slots. Time-based slicing skips targets.
+                actions, model, index = incoming[consumed:], incoming_model[consumed:], 0
             remaining = len(actions) - index
             if remaining == 0:
                 if rtc:
@@ -68,6 +72,8 @@ async def execute_chunks(policy, environment, *, payload_fn, extract_fn, rate_li
                     raise RuntimeError("RTC prefix cannot cover observed latency")
                 request_started = clock()
                 observation = environment.get_observation()
+                observation_ms = (clock() - request_started) * 1000
+                logger.info("RTC observation acquisition %.1f ms", observation_ms)
                 request_step = step
                 pending = asyncio.create_task(request(observation, model[index:].copy()))
             action = actions[index].copy()
@@ -75,10 +81,21 @@ async def execute_chunks(policy, environment, *, payload_fn, extract_fn, rate_li
                 previous = last_sent if last_sent is not None else np.asarray(observation[state_key])
                 action = gripper_fn(action, previous)
             action = rate_limit_fn(action, last_sent, max_delta)
+            send_started = clock()
+            interval_ms = None if previous_send_started is None else (send_started - previous_send_started) * 1000
+            previous_send_started = send_started
+            joint_indices = np.r_[0:6, 7:13]
+            joint_delta = None if last_sent is None else float(np.max(np.abs(action[joint_indices] - last_sent[joint_indices])))
             last_sent = np.asarray(environment.apply_action(action, pace=False), dtype=np.float64)
+            apply_ms = (clock() - send_started) * 1000
+            if interval_ms is not None and interval_ms > period * 1500:
+                logger.warning("Control gap: interval=%.1f ms target=%.1f ms apply=%.1f ms joint_target_delta=%.5f rad",
+                               interval_ms, period * 1000, apply_ms, joint_delta)
             if log is not None:
                 log.write("control_step", control_timestep=step, rtc=rtc,
-                          queued_action=actions[index].tolist(), applied_action=last_sent.tolist())
+                          queued_action=actions[index].tolist(), applied_action=last_sent.tolist(),
+                          send_started_monotonic=send_started, send_interval_ms=interval_ms,
+                          apply_action_ms=apply_ms, joint_target_delta_rad=joint_delta)
             index += 1
             step += 1
             deadline = max(deadline + period, clock())
