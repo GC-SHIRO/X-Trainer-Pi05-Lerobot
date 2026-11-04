@@ -172,7 +172,6 @@ from typing import cast
 from lerobot.cameras.opencv import OpenCVCameraConfig  # noqa: F401
 from lerobot.cameras.realsense import RealSenseCameraConfig  # noqa: F401
 from lerobot.cameras.zmq import ZMQCameraConfig  # noqa: F401
-from lerobot.robots.xtrainer import XTrainerConfig  # noqa: F401
 from lerobot.configs import parser
 from lerobot.robots import (  # noqa: F401
     Robot,
