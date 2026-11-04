@@ -1,5 +1,7 @@
 """Pi05 adapter for the X-Trainer WebSocket protocol."""
 from pathlib import Path
+import logging
+import time
 import numpy as np
 
 from deploy.xtrainer.real.constants import XTRAINER_RESET_POSE
@@ -73,6 +75,35 @@ class PI05XTrainerPolicy:
             reset = getattr(processor, "reset", None)
             if callable(reset):
                 reset()
+
+    def warmup(self):
+        """Initialize ordinary and guided inference on the serving thread."""
+        import torch
+
+        device = torch.device(self.policy.config.device)
+        cuda_devices = [device.index if device.index is not None else torch.cuda.current_device()] if device.type == "cuda" else []
+        height, width = self.policy.config.image_resolution
+        payload = {
+            "state": np.asarray(XTRAINER_RESET_POSE, dtype=np.float32),
+            "task": "Warm up the policy.",
+            "images": {name: np.zeros((height, width, 3), dtype=np.uint8) for name in CAMERAS},
+        }
+        logger = logging.getLogger(__name__)
+        started = time.perf_counter()
+        logger.info("Policy warmup starting on %s (RTC=%s)", device, self.rtc_enabled)
+        # Startup sampling must not change the random sequence for real requests.
+        with torch.random.fork_rng(devices=cuda_devices):
+            try:
+                self.reset()
+                result = self.infer(payload)
+                if self.rtc_enabled:
+                    payload.update(prev_chunk_left_over=result["model_action"], inference_delay=1)
+                    self.infer(payload)
+                if device.type == "cuda":
+                    torch.cuda.synchronize(device)
+            finally:
+                self.reset()
+        logger.info("Policy warmup complete in %.1f ms", (time.perf_counter() - started) * 1000)
 
     @staticmethod
     def validate_payload(payload):

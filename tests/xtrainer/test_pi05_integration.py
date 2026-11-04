@@ -151,6 +151,84 @@ def test_mock_server_roundtrip():
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("rtc_enabled", [False, True])
+@pytest.mark.parametrize("fail", [False, True])
+def test_warmup_covers_rtc_and_restores_state(rtc_enabled, fail):
+    import torch
+
+    adapter = PI05XTrainerPolicy.__new__(PI05XTrainerPolicy)
+    adapter.rtc_enabled = rtc_enabled
+    adapter.actions_per_chunk = 5
+    resets, predictions = [], []
+
+    def predict(batch, **kwargs):
+        predictions.append(kwargs)
+        torch.rand(1)
+        assert batch["observation.images.top"].shape == (3, 8, 10)
+        if fail:
+            raise RuntimeError("warmup failed")
+        return torch.ones(1, 5, 14)
+
+    adapter.policy = SimpleNamespace(
+        config=SimpleNamespace(device="cpu", image_resolution=(8, 10)),
+        reset=lambda: resets.append("policy"), predict_action_chunk=predict)
+    adapter.preprocessor = lambda batch: batch
+    adapter.postprocessor = lambda actions: actions * 10
+    before = torch.get_rng_state().clone()
+    if fail:
+        with pytest.raises(RuntimeError, match="warmup failed"):
+            adapter.warmup()
+    else:
+        adapter.warmup()
+        assert len(predictions) == (2 if rtc_enabled else 1)
+        if rtc_enabled:
+            assert predictions[0]["prev_chunk_left_over"] is None
+            assert predictions[1]["inference_delay"] == 1
+            # Guidance must reuse normalized model output, before postprocessing.
+            torch.testing.assert_close(predictions[1]["prev_chunk_left_over"], torch.ones(1, 5, 14))
+    assert resets == ["policy", "policy"]
+    assert torch.equal(before, torch.get_rng_state())
+
+
+def test_server_warmup_precedes_readiness_on_inference_thread():
+    import threading
+
+    async def run():
+        events = []
+
+        class Policy(HoldCurrentMockPolicy):
+            def warmup(self):
+                assert server._site is None
+                events.append(("warmup", threading.get_ident()))
+
+            def infer(self, observation):
+                events.append(("infer", threading.get_ident()))
+                return super().infer(observation)
+
+        server = XTrainerWebSocketPolicyServer(Policy(chunk_size=5), port=0)
+        await server.start()
+        client = XTrainerWebSocketPolicyClient(f"http://127.0.0.1:{server.port}")
+        try:
+            await client.connect()
+            await client.infer(payload())
+            assert events == [("warmup", threading.get_ident()), ("infer", threading.get_ident())]
+        finally:
+            await client.close()
+            await server.stop()
+    asyncio.run(run())
+
+
+def test_server_warmup_failure_prevents_readiness():
+    def fail():
+        raise RuntimeError("warmup failed")
+
+    server = XTrainerWebSocketPolicyServer(SimpleNamespace(warmup=fail), port=0)
+    with pytest.raises(RuntimeError, match="warmup failed"):
+        asyncio.run(server.start())
+    assert server._runner is None
+    assert server._site is None
+
+
 def test_launcher(tmp_path):
     meta = tmp_path / "meta"
     meta.mkdir()

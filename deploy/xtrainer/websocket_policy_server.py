@@ -47,6 +47,14 @@ class XTrainerWebSocketPolicyServer:
     async def start(self) -> None:
         from aiohttp import web
 
+        # Synchronous inference runs on this event-loop thread, including RTC
+        # requests. Warm it here before exposing readiness or accepting clients.
+        warmup = getattr(self.policy, "warmup", None)
+        if callable(warmup):
+            result = warmup()
+            if inspect.isawaitable(result):
+                await result
+
         app = web.Application()
         app.router.add_get("/healthz", self._handle_healthz)
         app.router.add_get("/metadata", self._handle_metadata)
