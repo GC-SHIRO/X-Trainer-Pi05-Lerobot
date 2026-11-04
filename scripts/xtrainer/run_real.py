@@ -233,11 +233,15 @@ async def run_control_loop(
     request_timeout_s: float,
     max_delta_per_step: float,
     bin_gripper: bool = False,
+    ema_enabled: bool = True,
+    joint_ema_alpha: float = 0.25,
+    gripper_ema_alpha: float = 0.5,
+    gripper_ema_jump_threshold: float = 0.4,
     control_log: ControlActionLog | None = None,
     monotonic_fn: Any = time.monotonic,
     sleep_fn: Any = asyncio.sleep,
 ) -> None:
-    """Execute raw policy chunks, with optional server-advertised guided RTC."""
+    """Execute policy chunks with EMA and optional server-advertised guided RTC."""
     from deploy.xtrainer.rtc_runner import execute_chunks
     await execute_chunks(policy, environment, payload_fn=_policy_payload,
                          extract_fn=_extract_action_chunk, rate_limit_fn=_rate_limit_action,
@@ -245,7 +249,10 @@ async def run_control_loop(
                          state_key=STATE_KEY, action_horizon=action_horizon,
                          control_hz=control_hz, max_steps=max_steps,
                          timeout=request_timeout_s, max_delta=max_delta_per_step,
-                         log=control_log, clock=monotonic_fn, sleep=sleep_fn)
+                         log=control_log, clock=monotonic_fn, sleep=sleep_fn,
+                         ema_enabled=ema_enabled, joint_ema_alpha=joint_ema_alpha,
+                         gripper_ema_alpha=gripper_ema_alpha,
+                         gripper_ema_jump_threshold=gripper_ema_jump_threshold)
 
 
 def _apply_binary_gripper_close(action: np.ndarray, previous_action: np.ndarray) -> np.ndarray:
@@ -437,10 +444,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Explicitly allow enabling and moving the real robot",
     )
+    parser.add_argument("--no-ema", action="store_true", help="Disable joint and gripper EMA filtering")
+    parser.add_argument("--joint-ema-alpha", type=float, default=0.25,
+                        help="Joint EMA weight in (0, 1]; smaller values smooth more and add lag")
+    parser.add_argument("--gripper-ema-alpha", type=float, default=0.5,
+                        help="Gripper EMA weight in (0, 1]; --bin-gripper takes precedence")
+    parser.add_argument("--gripper-ema-jump-threshold", type=float, default=0.4,
+                        help="Gripper change above which EMA is bypassed, in normalized opening units")
     return parser.parse_args(argv)
 
 
 def _validate_args(args: argparse.Namespace) -> None:
+    from deploy.xtrainer.rtc_runner import validate_ema_config
+
+    validate_ema_config(args.joint_ema_alpha, args.gripper_ema_alpha, args.gripper_ema_jump_threshold)
     positive_values = {
         "port": args.port,
         "action_horizon": args.action_horizon,
@@ -512,6 +529,10 @@ async def run(
             request_timeout_s=args.request_timeout,
             max_delta_per_step=args.max_delta_per_step,
             bin_gripper=args.bin_gripper,
+            ema_enabled=not args.no_ema,
+            joint_ema_alpha=args.joint_ema_alpha,
+            gripper_ema_alpha=args.gripper_ema_alpha,
+            gripper_ema_jump_threshold=args.gripper_ema_jump_threshold,
             control_log=control_log,
         )
     finally:

@@ -17,7 +17,8 @@ execute_chunks = _module.execute_chunks
 
 
 @pytest.mark.parametrize("observation_delay", [0.0, 0.12])
-def test_rtc_switch_preserves_action_sequence_when_control_ticks_overrun(observation_delay):
+@pytest.mark.parametrize("ema_enabled", [False, True])
+def test_rtc_switch_preserves_action_sequence_when_control_ticks_overrun(observation_delay, ema_enabled):
     async def scenario():
         now = [0.0]
         sent = []
@@ -59,12 +60,17 @@ def test_rtc_switch_preserves_action_sequence_when_control_ticks_overrun(observa
             extract_fn=lambda result, horizon: result["action"][:horizon],
             rate_limit_fn=lambda action, previous, limit: action,
             gripper_fn=None, state_key="state", action_horizon=50,
-            control_hz=30, max_steps=100, timeout=5, max_delta=0,
+            control_hz=30, max_steps=100, timeout=5, max_delta=0, ema_enabled=ema_enabled,
             log=Log(), clock=lambda: now[0], sleep=sleep,
         )
         # Exclude the final cleanup hold. Predictions reproduce the prefix
         # exactly, so any missing value is a client-side alignment error.
-        np.testing.assert_array_equal(np.asarray(sent[:100])[:, 0], np.arange(100))
+        expected = np.arange(100, dtype=float)
+        if ema_enabled:
+            for index in range(1, len(expected)):
+                expected[index] = expected[index - 1] + 0.25 * (index - expected[index - 1])
+        np.testing.assert_allclose(np.asarray(sent[:100])[:, 0], expected)
+        np.testing.assert_array_equal(np.asarray([e["queued_action"] for e in events])[:, 0], np.arange(100))
         assert len(events) == 100
         assert switches
         assert all(event["revised_next_target_delta_rad"] == 0 for event in switches)
@@ -74,3 +80,72 @@ def test_rtc_switch_preserves_action_sequence_when_control_ticks_overrun(observa
             assert max(event["send_interval_ms"] or 0 for event in events) > 100
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("ema_enabled", [False, True])
+@pytest.mark.parametrize("binary_gripper", [False, True])
+def test_ema_uses_applied_target_and_preserves_binary_gripper(ema_enabled, binary_gripper):
+    async def scenario():
+        initial = np.full(14, 0.2)
+        raw = np.full((3, 14), 1.0)
+        raw[1, :6] = -1.0
+        raw[1, 7:13] = -1.0
+        raw[:, 6] = [0.4, 0.9, 0.8]
+        raw[:, 13] = [0.9, 0.8, 0.7]
+        sent, events = [], []
+
+        class Environment:
+            def get_observation(self):
+                return {"state": initial.copy()}
+
+            def apply_action(self, action, *, pace):
+                applied = np.clip(action, -0.3, 0.3)
+                sent.append(applied.copy())
+                return applied
+
+        class Policy:
+            async def infer(self, payload):
+                return {"action": raw}
+
+        class Log:
+            def write(self, event, **fields):
+                events.append(fields)
+
+        def binary(action, previous):
+            result = action.copy()
+            result[[6, 13]] = 0.1
+            return result
+
+        await execute_chunks(
+            Policy(), Environment(), payload_fn=dict,
+            extract_fn=lambda result, horizon: result["action"],
+            rate_limit_fn=lambda action, previous, limit: action,
+            gripper_fn=binary if binary_gripper else None, state_key="state",
+            action_horizon=3, control_hz=33, max_steps=3, timeout=5, max_delta=0,
+            log=Log(), clock=lambda: 0, sleep=asyncio.sleep, ema_enabled=ema_enabled,
+        )
+        filtered = np.array([event["filtered_action"] for event in events])
+        joints = np.r_[0:6, 7:13]
+        if ema_enabled:
+            # Step 1 starts from hardware-clamped 0.3, not the previous EMA target 0.4.
+            np.testing.assert_allclose(filtered[:, joints], np.repeat([[0.4], [-0.025], [0.23125]], 12, axis=1))
+        else:
+            np.testing.assert_array_equal(filtered[:, joints], raw[:, joints])
+        if binary_gripper:
+            np.testing.assert_allclose(filtered[:, [6, 13]], 0.1)
+        elif ema_enabled:
+            np.testing.assert_allclose(filtered[:, [6, 13]], [[0.3, 0.9], [0.9, 0.8], [0.8, 0.5]])
+            assert events[0]["gripper_ema_jump"] == [False, True]
+        else:
+            np.testing.assert_array_equal(filtered[:, [6, 13]], raw[:, [6, 13]])
+        np.testing.assert_array_equal(raw[:, 0], [1, -1, 1])
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("values", [(0, 0.5, 0.4), (1.1, 0.5, 0.4),
+                                     (0.25, float("nan"), 0.4), (0.25, 0.5, -1),
+                                     (0.25, 0.5, float("inf"))])
+def test_invalid_ema_parameters(values):
+    with pytest.raises(ValueError):
+        _module.validate_ema_config(*values)

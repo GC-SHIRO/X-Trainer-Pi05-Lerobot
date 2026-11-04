@@ -4,14 +4,30 @@ import logging
 import numpy as np
 
 
+def validate_ema_config(joint_alpha, gripper_alpha, gripper_jump_threshold):
+    for name, value in (("joint_ema_alpha", joint_alpha), ("gripper_ema_alpha", gripper_alpha)):
+        if not np.isfinite(value) or not 0 < value <= 1:
+            raise ValueError(f"{name} must be finite and within (0, 1]")
+    if not np.isfinite(gripper_jump_threshold) or gripper_jump_threshold < 0:
+        raise ValueError("gripper_ema_jump_threshold must be finite and nonnegative")
+
+
 async def execute_chunks(policy, environment, *, payload_fn, extract_fn, rate_limit_fn,
                          gripper_fn, state_key, action_horizon, control_hz, max_steps,
-                         timeout, max_delta, log, clock, sleep):
+                         timeout, max_delta, log, clock, sleep, ema_enabled=True,
+                         joint_ema_alpha=0.25, gripper_ema_alpha=0.5,
+                         gripper_ema_jump_threshold=0.4):
+    validate_ema_config(joint_ema_alpha, gripper_ema_alpha, gripper_ema_jump_threshold)
     metadata = (getattr(policy, "metadata", None) or {}).get("policy", {})
     rtc = bool(metadata.get("rtc_enabled"))
     horizon = int(metadata["chunk_size"]) if rtc else action_horizon
     logger = logging.getLogger(__name__)
     logger.info("Execution mode=%s prediction_steps=%d control_hz=%.2f", "guided RTC" if rtc else "sequential", horizon, control_hz)
+    logger.info("EMA enabled=%s joint_alpha=%.3f gripper_alpha=%.3f gripper_jump_threshold=%.3f binary_gripper=%s",
+                ema_enabled, joint_ema_alpha, gripper_ema_alpha, gripper_ema_jump_threshold,
+                gripper_fn is not None)
+    joint_indices = np.r_[0:6, 7:13]
+    gripper_indices = np.array([6, 13])
     period = 1 / control_hz
     pending = None
     last_sent = None
@@ -38,6 +54,7 @@ async def execute_chunks(policy, environment, *, payload_fn, extract_fn, rate_li
     try:
         started = clock()
         observation = environment.get_observation()
+        initial_state = np.asarray(observation[state_key], dtype=np.float64).copy()
         actions, model = unpack(await request(observation))
         delay = max(1, int(np.ceil((clock() - started) / period)) + 2)
         index = 0
@@ -83,15 +100,27 @@ async def execute_chunks(policy, environment, *, payload_fn, extract_fn, rate_li
                 logger.info("RTC observation acquisition %.1f ms", observation_ms)
                 request_step = step
                 pending = asyncio.create_task(request(observation, model[index:].copy()))
-            action = actions[index].copy()
+            action = np.array(actions[index], dtype=np.float64, copy=True)
+            previous = last_sent if last_sent is not None else initial_state
+            gripper_jump = np.zeros(2, dtype=bool)
+            if ema_enabled:
+                # Only executed targets advance the filter. The model-space RTC
+                # prefix stays raw, and hardware-limited output anchors the next step.
+                action[joint_indices] = previous[joint_indices] + joint_ema_alpha * (
+                    action[joint_indices] - previous[joint_indices])
+                if gripper_fn is None:
+                    delta = action[gripper_indices] - previous[gripper_indices]
+                    gripper_jump = np.abs(delta) > gripper_ema_jump_threshold
+                    action[gripper_indices] = np.where(
+                        gripper_jump, action[gripper_indices],
+                        previous[gripper_indices] + gripper_ema_alpha * delta)
             if gripper_fn is not None:
-                previous = last_sent if last_sent is not None else np.asarray(observation[state_key])
                 action = gripper_fn(action, previous)
+            filtered_action = action.copy()
             action = rate_limit_fn(action, last_sent, max_delta)
             send_started = clock()
             interval_ms = None if previous_send_started is None else (send_started - previous_send_started) * 1000
             previous_send_started = send_started
-            joint_indices = np.r_[0:6, 7:13]
             joint_delta = None if last_sent is None else float(np.max(np.abs(action[joint_indices] - last_sent[joint_indices])))
             last_sent = np.asarray(environment.apply_action(action, pace=False), dtype=np.float64)
             apply_ms = (clock() - send_started) * 1000
@@ -101,6 +130,8 @@ async def execute_chunks(policy, environment, *, payload_fn, extract_fn, rate_li
             if log is not None:
                 log.write("control_step", control_timestep=step, rtc=rtc,
                           queued_action=actions[index].tolist(), applied_action=last_sent.tolist(),
+                          filtered_action=filtered_action.tolist(), ema_enabled=ema_enabled,
+                          gripper_ema_jump=gripper_jump.tolist(),
                           send_started_monotonic=send_started, send_interval_ms=interval_ms,
                           apply_action_ms=apply_ms, joint_target_delta_rad=joint_delta,
                           action_stages_ms=dict(getattr(environment, "last_action_timing_ms", {})))

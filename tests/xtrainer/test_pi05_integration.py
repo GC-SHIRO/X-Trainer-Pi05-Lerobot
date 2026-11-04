@@ -48,7 +48,12 @@ def test_checkpoint_contract():
         PI05XTrainerPolicy.validate_config(cfg, 32)
 
 
-def test_pi05_startup_resets_before_inference(monkeypatch):
+@pytest.mark.parametrize("ema_args, expected_ema", [
+    ([], (True, 0.25, 0.5, 0.4)),
+    (["--no-ema", "--joint-ema-alpha", "0.3", "--gripper-ema-alpha", "0.6",
+      "--gripper-ema-jump-threshold", "0.7"], (False, 0.3, 0.6, 0.7)),
+])
+def test_pi05_startup_resets_before_inference(monkeypatch, ema_args, expected_ema):
     from deploy.xtrainer.real.constants import XTRAINER_RESET_POSE
     from scripts.xtrainer import run_real
 
@@ -70,6 +75,8 @@ def test_pi05_startup_resets_before_inference(monkeypatch):
         events.append("policy_close")
 
     async def loop(*args, **kwargs):
+        assert (kwargs["ema_enabled"], kwargs["joint_ema_alpha"], kwargs["gripper_ema_alpha"],
+                kwargs["gripper_ema_jump_threshold"]) == expected_ema
         events.append("inference")
 
     def smooth_reset(pose):
@@ -82,7 +89,7 @@ def test_pi05_startup_resets_before_inference(monkeypatch):
         smooth_reset=smooth_reset, close=lambda: events.append("hardware_close"))
     policy = SimpleNamespace(connect=connect, reset=reset, close=close)
     monkeypatch.setattr(run_real, "run_control_loop", loop)
-    args = run_real.parse_args(["--host", "localhost", "--execute"])
+    args = run_real.parse_args(["--host", "localhost", "--execute", *ema_args])
     asyncio.run(run_real.run(args, policy=policy, environment=environment))
     assert events == ["connect_hardware", "enable", "pose_reset", "policy_reset",
                       "inference", "hardware_close", "policy_close"]
