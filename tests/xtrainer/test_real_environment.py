@@ -340,3 +340,33 @@ def test_apply_action_can_defer_pacing_to_external_control_loop():
     env.apply_action(env._last_state, pace=False)
 
     assert sleeps == []
+
+
+@pytest.mark.parametrize("fail_left", [False, True])
+def test_action_connections_overlap_and_drain_before_return(fail_left):
+    from threading import Barrier, Event
+    from types import SimpleNamespace
+
+    barrier = Barrier(4, timeout=2)
+    completed = [Event() for _ in range(4)]
+    def operation(index):
+        def send(*args):
+            barrier.wait()
+            completed[index].set()
+            if fail_left and index == 0:
+                raise OSError("left arm failure")
+        return send
+    arm = lambda i: SimpleNamespace(move_joints=operation(i))
+    gripper = lambda i: SimpleNamespace(write=operation(i))
+    env = XTrainerRealEnvironment(arm(0), arm(1), gripper(2), gripper(3), {}, "test")
+    env._last_state = np.zeros(14)
+    try:
+        if fail_left:
+            with pytest.raises(OSError, match="left arm failure"):
+                env.apply_action(np.zeros(14), pace=False)
+        else:
+            env.apply_action(np.zeros(14), pace=False)
+        assert all(event.is_set() for event in completed)
+    finally:
+        env.close()
+    assert env._action_workers is None

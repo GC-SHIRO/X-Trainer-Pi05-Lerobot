@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
 
+from deploy.xtrainer.real.hardware.dobot_xtrainer import DEFAULT_CONTROL_HZ
 from deploy.xtrainer.image_tools import validate_camera_observations
 from deploy.xtrainer.real.hardware.realsense_camera import DEFAULT_XTRAINER_CAMERA_CONFIGS
 
@@ -52,11 +54,25 @@ class XTrainerRealEnvironment:
     cameras: dict[str, Any]
     task: str
     safety: XTrainerSafetyConfig = field(default_factory=XTrainerSafetyConfig)
-    control_hz: float = 30.0
+    control_hz: float = DEFAULT_CONTROL_HZ
     sleep_fn: Any = time.sleep
     _last_state: np.ndarray | None = field(default=None, init=False, repr=False)
     _closed: bool = field(default=False, init=False, repr=False)
     _enabled_arms: list[Any] = field(default_factory=list, init=False, repr=False)
+
+    last_observation_timing_ms: dict[str, float] = field(default_factory=dict, init=False)
+    last_action_timing_ms: dict[str, float] = field(default_factory=dict, init=False)
+    _timing_action_count: int = field(default=0, init=False, repr=False)
+
+    _action_workers: ThreadPoolExecutor | None = field(default=None, init=False, repr=False)
+
+    @staticmethod
+    def _timed(timings, name, operation, *args):
+        started = time.perf_counter()
+        try:
+            return operation(*args)
+        finally:
+            timings[name] = (time.perf_counter() - started) * 1000
 
     def reset(self) -> dict[str, Any]:
         self._closed = False
@@ -65,9 +81,13 @@ class XTrainerRealEnvironment:
         return self.get_observation()
 
     def get_observation(self) -> dict[str, Any]:
+        started = time.perf_counter()
+        self.last_observation_timing_ms = {}
         state = self._read_state()
         camera_observations = self._read_images()
         self._last_state = state.copy()
+        self.last_observation_timing_ms["total"] = (time.perf_counter() - started) * 1000
+        _LOGGER.info("Observation stages ms: %s", {k: round(v, 2) for k, v in self.last_observation_timing_ms.items()})
         return {STATE_KEY: state, **camera_observations, TASK_KEY: self.task}
 
     def apply_action(self, action: Any, *, pace: bool = True) -> np.ndarray:
@@ -82,12 +102,35 @@ class XTrainerRealEnvironment:
             self._last_state = self._read_state()
         limited = self._limit_action(action, self._last_state)
 
-        self.left_arm.move_joints(limited[:6])
-        self.right_arm.move_joints(limited[7:13])
-        self._write_gripper_if_needed(self.left_gripper, limited[6], self._last_state[6])
-        self._write_gripper_if_needed(self.right_gripper, limited[13], self._last_state[13])
+        timings = {}
+        started = time.perf_counter()
+        # Independent hardware connections run concurrently. Join the entire batch
+        # before the next action so each connection has only one request in flight.
+        if self._action_workers is None:
+            self._action_workers = ThreadPoolExecutor(max_workers=4, thread_name_prefix="xtrainer-action")
+        operations = [
+            ("left_arm", self.left_arm.move_joints, limited[:6]),
+            ("right_arm", self.right_arm.move_joints, limited[7:13]),
+            ("left_gripper", self._write_gripper_if_needed, self.left_gripper, limited[6], self._last_state[6]),
+            ("right_gripper", self._write_gripper_if_needed, self.right_gripper, limited[13], self._last_state[13]),
+        ]
+        futures = []
+        try:
+            for name, operation, *args in operations:
+                futures.append(self._action_workers.submit(self._timed, timings, name, operation, *args))
+        finally:
+            # Also drain successful submissions if submission itself fails.
+            wait(futures)
+        for future in futures:
+            future.result()
+        timings["total"] = (time.perf_counter() - started) * 1000
+        self.last_action_timing_ms = timings
+        self._timing_action_count += 1
+        # Keep console logging bounded; every step is available in the JSONL trace.
+        if self._timing_action_count % max(1, round(self.control_hz)) == 0:
+            _LOGGER.info("Action stages ms: %s", {k: round(v, 2) for k, v in timings.items()})
         if pace:
-            self._sleep_control_period()
+            self.sleep_fn(max(0.0, 1.0 / self.control_hz - (time.perf_counter() - started)))
         self._last_state = limited.copy()
         return limited
 
@@ -125,6 +168,9 @@ class XTrainerRealEnvironment:
         if self._closed:
             return
         self._closed = True
+        if self._action_workers is not None:
+            self._action_workers.shutdown(wait=True)
+            self._action_workers = None
         self.disable_arms()
         for resource in [
             *self.cameras.values(),
@@ -176,14 +222,14 @@ class XTrainerRealEnvironment:
             _LOGGER.warning("Failed to disable X-trainer arm %r", arm, exc_info=True)
 
     def _read_state(self) -> np.ndarray:
-        left = np.asarray(self.left_arm.read_joints(), dtype=np.float64)
-        right = np.asarray(self.right_arm.read_joints(), dtype=np.float64)
+        left = np.asarray(self._timed(self.last_observation_timing_ms, "left_GetAngle", self.left_arm.read_joints), dtype=np.float64)
+        right = np.asarray(self._timed(self.last_observation_timing_ms, "right_GetAngle", self.right_arm.read_joints), dtype=np.float64)
         if left.shape != (6,):
             raise ValueError(f"left arm state must have shape (6,), got {left.shape}")
         if right.shape != (6,):
             raise ValueError(f"right arm state must have shape (6,), got {right.shape}")
-        left_gripper = float(self.left_gripper.read())
-        right_gripper = float(self.right_gripper.read())
+        left_gripper = float(self._timed(self.last_observation_timing_ms, "left_gripper_read", self.left_gripper.read))
+        right_gripper = float(self._timed(self.last_observation_timing_ms, "right_gripper_read", self.right_gripper.read))
         state = np.concatenate([left, [left_gripper], right, [right_gripper]]).astype(np.float32)
         if not np.all(np.isfinite(state)):
             raise ValueError("X-trainer state contains NaN or Inf")
@@ -194,7 +240,7 @@ class XTrainerRealEnvironment:
         for name, camera in self.cameras.items():
             config = getattr(camera, "config", None)
             observation_key = getattr(config, "observation_key", DEFAULT_XTRAINER_CAMERA_CONFIGS[name].observation_key)
-            observations[observation_key] = camera.read_rgb()
+            observations[observation_key] = self._timed(self.last_observation_timing_ms, f"camera_{name}", camera.read_rgb)
         return validate_camera_observations(observations, IMAGE_KEYS)
 
     def _validate_action(self, action: Any) -> np.ndarray:

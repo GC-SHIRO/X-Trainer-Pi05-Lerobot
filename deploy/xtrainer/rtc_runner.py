@@ -53,6 +53,13 @@ async def execute_chunks(policy, environment, *, payload_fn, extract_fn, rate_li
                 logger.info("RTC result: elapsed_steps=%d executed_steps=%d alignment_steps=%d next_delay=%d", elapsed, consumed, consumed, delay)
                 if elapsed >= len(incoming):
                     raise RuntimeError("RTC prediction expired; stopping")
+                joints = np.r_[0:6, 7:13]
+                seam_delta = None if last_sent is None else float(np.max(np.abs(incoming[consumed, joints] - last_sent[joints])))
+                revision_delta = float(np.max(np.abs(incoming[consumed, joints] - actions[index, joints]))) if index < len(actions) else None
+                logger.info("RTC seam: target_step_delta_rad=%s revised_next_target_delta_rad=%s", seam_delta, revision_delta)
+                if log is not None:
+                    log.write("rtc_switch", executed_steps=consumed, elapsed_steps=elapsed,
+                              target_step_delta_rad=seam_delta, revised_next_target_delta_rad=revision_delta)
                 # This executor advances one action per successful apply_action,
                 # including when a tick overruns. The prefix is indexed by those
                 # actions, not wall-clock slots. Time-based slicing skips targets.
@@ -95,7 +102,8 @@ async def execute_chunks(policy, environment, *, payload_fn, extract_fn, rate_li
                 log.write("control_step", control_timestep=step, rtc=rtc,
                           queued_action=actions[index].tolist(), applied_action=last_sent.tolist(),
                           send_started_monotonic=send_started, send_interval_ms=interval_ms,
-                          apply_action_ms=apply_ms, joint_target_delta_rad=joint_delta)
+                          apply_action_ms=apply_ms, joint_target_delta_rad=joint_delta,
+                          action_stages_ms=dict(getattr(environment, "last_action_timing_ms", {})))
             index += 1
             step += 1
             deadline = max(deadline + period, clock())

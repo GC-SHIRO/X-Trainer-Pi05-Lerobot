@@ -32,7 +32,7 @@ from deploy.xtrainer.real.environment import (
     TASK_KEY,
     TOP_IMAGE_KEY,
 )
-from deploy.xtrainer.real.hardware.dobot_xtrainer import XTrainerDobotArm
+from deploy.xtrainer.real.hardware.dobot_xtrainer import DEFAULT_CONTROL_HZ, XTrainerDobotArm
 from deploy.xtrainer.real.hardware.feetech import (
     XTrainerFeetechGripper,
     XTrainerFeetechGripperConfig,
@@ -309,8 +309,8 @@ def build_environment(args: argparse.Namespace) -> XTrainerRealEnvironment:
         warmup_frames=args.camera_warmup_frames,
     )
     return XTrainerRealEnvironment(
-        left_arm=XTrainerDobotArm.from_parts(ip=args.left_robot_ip),
-        right_arm=XTrainerDobotArm.from_parts(ip=args.right_robot_ip),
+        left_arm=XTrainerDobotArm.from_parts(ip=args.left_robot_ip, control_hz=args.control_hz),
+        right_arm=XTrainerDobotArm.from_parts(ip=args.right_robot_ip, control_hz=args.control_hz),
         left_gripper=XTrainerFeetechGripper(
             XTrainerFeetechGripperConfig(port=args.left_gripper_port, motor_id=args.left_gripper_id)
         ),
@@ -336,7 +336,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--task", default="pick up the object")
     parser.add_argument("--action-horizon", type=int, default=32)
-    parser.add_argument("--control-hz", type=float, default=30.0)
+    parser.add_argument("--control-hz", type=float, default=DEFAULT_CONTROL_HZ)
     parser.add_argument("--max-steps", type=int, default=1000)
     parser.add_argument(
         "--left-robot-ip", "--left-arm-ip", dest="left_robot_ip", default="192.168.5.1"

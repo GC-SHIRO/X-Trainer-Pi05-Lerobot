@@ -14,7 +14,8 @@ import numpy as np
 DEFAULT_DASHBOARD_PORT = 29999
 DEFAULT_MOTION_PORT = 30003
 DEFAULT_TIMEOUT_S = 5.0
-DEFAULT_SERVO_J_TIME_S = 0.03
+DEFAULT_CONTROL_HZ = 33.0
+DEFAULT_SERVO_J_TIME_S = 1.0 / DEFAULT_CONTROL_HZ
 DEFAULT_SERVO_GAIN = 500
 _FLOAT_RE = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?")
 
@@ -50,6 +51,11 @@ class DobotArmConfig:
     motion_port: int = DEFAULT_MOTION_PORT
     timeout_s: float = DEFAULT_TIMEOUT_S
     joint_unit: str = "rad"
+    control_hz: float = DEFAULT_CONTROL_HZ
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.control_hz) or not 1 / 3600 <= self.control_hz <= 50:
+            raise ValueError("control_hz must produce a ServoJ duration within [0.02, 3600] seconds")
 
 
 def parse_dobot_response(raw: str) -> DobotResponse:
@@ -199,7 +205,7 @@ class XTrainerDobotArm:
         values = np.rad2deg(array) if self.config.joint_unit == "rad" else array
         if np.any(np.abs(values) > 360.0 * 4):
             raise ValueError("Dobot joint command is outside a plausible joint range")
-        self.motion.request(make_joint_command(values))
+        self.motion.request(make_joint_command(values, duration_s=1.0 / self.config.control_hz))
 
     @classmethod
     def from_parts(
@@ -210,6 +216,7 @@ class XTrainerDobotArm:
         motion_port: int = DEFAULT_MOTION_PORT,
         timeout_s: float = DEFAULT_TIMEOUT_S,
         joint_unit: str = "rad",
+        control_hz: float = DEFAULT_CONTROL_HZ,
         socket_factory=socket.socket,
     ) -> "XTrainerDobotArm":
         if joint_unit not in ("rad", "deg"):
@@ -220,6 +227,7 @@ class XTrainerDobotArm:
             motion_port=motion_port,
             timeout_s=timeout_s,
             joint_unit=joint_unit,
+            control_hz=control_hz,
         )
         return cls(config=config, socket_factory=socket_factory)
 
@@ -237,14 +245,16 @@ def split_xtrainer_arm_action(action: np.ndarray | list[float], side: str) -> np
     raise ValueError(f"side must be 'left' or 'right', got {side!r}")
 
 
-def make_joint_command(joints_deg: np.ndarray | list[float]) -> str:
+def make_joint_command(joints_deg: np.ndarray | list[float], *, duration_s: float = DEFAULT_SERVO_J_TIME_S) -> str:
     """Build the reference X-trainer ``ServoJ`` command from joint degrees."""
 
     array = np.asarray(joints_deg, dtype=np.float64)
     if array.shape != (6,) or not np.all(np.isfinite(array)):
         raise ValueError("joints_deg must be a finite 6-vector")
+    if not math.isfinite(duration_s) or not 0.02 <= duration_s <= 3600:
+        raise ValueError("ServoJ duration must be within [0.02, 3600] seconds")
     args = ",".join(f"{value:.6f}" for value in array)
-    return f"ServoJ({args},{DEFAULT_SERVO_J_TIME_S:.6f},gain={DEFAULT_SERVO_GAIN})"
+    return f"ServoJ({args},{duration_s:.6f},gain={DEFAULT_SERVO_GAIN})"
 
 
 def degrees_close(a: np.ndarray, b: np.ndarray, *, atol: float = 1e-6) -> bool:

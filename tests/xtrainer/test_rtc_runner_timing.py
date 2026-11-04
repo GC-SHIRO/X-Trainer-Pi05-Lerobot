@@ -22,6 +22,7 @@ def test_rtc_switch_preserves_action_sequence_when_control_ticks_overrun(observa
         now = [0.0]
         sent = []
         events = []
+        switches = []
 
         class Environment:
             def get_observation(self):
@@ -47,7 +48,7 @@ def test_rtc_switch_preserves_action_sequence_when_control_ticks_overrun(observa
 
         class Log:
             def write(self, event, **fields):
-                events.append(fields)
+                (events if event == "control_step" else switches).append(fields)
 
         async def sleep(seconds):
             now[0] += seconds
@@ -65,6 +66,8 @@ def test_rtc_switch_preserves_action_sequence_when_control_ticks_overrun(observa
         # exactly, so any missing value is a client-side alignment error.
         np.testing.assert_array_equal(np.asarray(sent[:100])[:, 0], np.arange(100))
         assert len(events) == 100
+        assert switches
+        assert all(event["revised_next_target_delta_rad"] == 0 for event in switches)
         assert events[0]["send_interval_ms"] is None
         assert all(event["apply_action_ms"] >= 0 for event in events)
         if observation_delay:

@@ -22,7 +22,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from deploy.xtrainer.real.environment import STATE_KEY, XTrainerRealEnvironment, XTrainerSafetyConfig
-from deploy.xtrainer.real.hardware.dobot_xtrainer import XTrainerDobotArm
+from deploy.xtrainer.real.hardware.dobot_xtrainer import DEFAULT_CONTROL_HZ, XTrainerDobotArm
 from deploy.xtrainer.real.hardware.feetech import (
     XTrainerFeetechGripper,
     XTrainerFeetechGripperConfig,
@@ -62,7 +62,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--camera-width", type=int, default=640)
     parser.add_argument("--camera-height", type=int, default=480)
     parser.add_argument("--camera-warmup-frames", type=int, default=10)
-    parser.add_argument("--control-hz", type=float, default=30.0)
+    parser.add_argument("--control-hz", type=float, default=DEFAULT_CONTROL_HZ)
     parser.add_argument("--hold-seconds", type=float, default=0.5)
     parser.add_argument("--max-gripper-delta", type=float, default=0.02)
     parser.add_argument("--gripper-open", type=float, default=1.0)
@@ -109,8 +109,8 @@ def build_environment(args: argparse.Namespace) -> XTrainerRealEnvironment:
         warmup_frames=args.camera_warmup_frames,
     )
     return XTrainerRealEnvironment(
-        left_arm=XTrainerDobotArm.from_parts(ip=args.left_robot_ip),
-        right_arm=XTrainerDobotArm.from_parts(ip=args.right_robot_ip),
+        left_arm=XTrainerDobotArm.from_parts(ip=args.left_robot_ip, control_hz=args.control_hz),
+        right_arm=XTrainerDobotArm.from_parts(ip=args.right_robot_ip, control_hz=args.control_hz),
         left_gripper=XTrainerFeetechGripper(
             XTrainerFeetechGripperConfig(port=args.left_gripper_port, motor_id=args.left_gripper_id)
         ),

@@ -438,7 +438,7 @@ python scripts/xtrainer/serve_mock_policy.py --host 0.0.0.0 --port 8000
 python scripts/xtrainer/run_real.py \
   --host 127.0.0.1 --port 8000 \
   --task "将吸管插进杯子里" \
-  --control-hz 30 \
+  --control-hz 33 \
   --action-horizon 32 \
   --max-steps 1000 \
   --execute

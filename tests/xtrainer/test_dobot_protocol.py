@@ -90,7 +90,7 @@ def test_dobot_move_joints_sends_motion_command():
     arm.move_joints(np.deg2rad([1, 2, 3, 4, 5, 6]))
 
     assert FakeSocket.created[1].sent[-1] == (
-        b"ServoJ(1.000000,2.000000,3.000000,4.000000,5.000000,6.000000,0.030000,gain=500)\n"
+        b"ServoJ(1.000000,2.000000,3.000000,4.000000,5.000000,6.000000,0.030303,gain=500)\n"
     )
 
 
@@ -118,7 +118,7 @@ def test_make_joint_command_rejects_bad_shape():
 
 def test_make_joint_command_matches_reference_servoj_format():
     assert make_joint_command([1, 2, 3, 4, 5, 6]) == (
-        "ServoJ(1.000000,2.000000,3.000000,4.000000,5.000000,6.000000,0.030000,gain=500)"
+        "ServoJ(1.000000,2.000000,3.000000,4.000000,5.000000,6.000000,0.030303,gain=500)"
     )
 
 
@@ -129,3 +129,19 @@ def test_default_realsense_serials_map_to_observation_keys():
     assert DEFAULT_XTRAINER_CAMERA_CONFIGS["left_wrist"].observation_key == "observation.images.left_wrist"
     assert DEFAULT_XTRAINER_CAMERA_CONFIGS["right_wrist"].serial == "412622271417"
     assert DEFAULT_XTRAINER_CAMERA_CONFIGS["right_wrist"].observation_key == "observation.images.right_wrist"
+
+
+def test_servoj_duration_tracks_control_frequency():
+    arm = XTrainerDobotArm.from_parts(ip="192.168.5.1", control_hz=25, socket_factory=FakeSocket)
+    arm.connect()
+    try:
+        arm.move_joints(np.zeros(6))
+        assert b",0.040000,gain=500)" in arm.motion.sock.sent[-1]
+    finally:
+        arm.close()
+
+
+@pytest.mark.parametrize("hz", [0, -1, float("nan"), float("inf"), 51])
+def test_reject_invalid_servo_frequency(hz):
+    with pytest.raises(ValueError):
+        XTrainerDobotArm.from_parts(ip="192.168.5.1", control_hz=hz)
